@@ -18,6 +18,7 @@ def build_application(
     home_dir: str | None = None,
     saas_mode: bool = False,
     read_only: bool = False,
+    json_response: bool = False,
 ):
     logger.info("Starting MotherDuck MCP Server")
     server = Server("mcp-server-motherduck")
@@ -27,6 +28,7 @@ def build_application(
         home_dir=home_dir,
         saas_mode=saas_mode,
         read_only=read_only,
+        json_response=json_response,
     )
 
     logger.info("Registering handlers")

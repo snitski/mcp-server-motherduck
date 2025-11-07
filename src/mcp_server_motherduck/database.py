@@ -19,10 +19,10 @@ class DatabaseClient:
         home_dir: str | None = None,
         saas_mode: bool = False,
         read_only: bool = False,
-        json_output: bool = False,
+        json_response: bool = False,
     ):
         self._read_only = read_only
-        self._json_output = json_output
+        self._json_response = json_response
         self.db_path, self.db_type = self._resolve_db_path_type(
             db_path, motherduck_token, saas_mode
         )
@@ -209,10 +209,24 @@ class DatabaseClient:
         columns = [d[0] for d in q.description]
         column_types = [d[1] for d in q.description]
 
-        if self._json_output:
-            # Return JSON output
-            result = [dict(zip(columns, row)) for row in rows]
-            out = json.dumps(result, indent=2)
+        if self._json_response:
+            # Extract column metadata
+            columns = [
+                {"name": d[0], "type": str(d[1])}
+                for d in q.description
+            ]
+
+            # Fetch all rows and convert to list of dicts
+            rows = [dict(zip([col["name"] for col in columns], row)) for row in q.fetchall()]
+
+            # Combine schema + data
+            result = {
+                "columns": columns,
+                "rows": rows
+            }
+
+            # Convert to JSON string
+            out = json.dumps(result)
         else:
             # Return tabulated output
             headers = [col + "\n" + str(col_type) for col, col_type in zip(columns, column_types)]
