@@ -3,7 +3,6 @@ import duckdb
 from typing import Literal, Optional
 import io
 from contextlib import redirect_stdout
-from tabulate import tabulate
 import json
 import logging
 from .configs import SERVER_VERSION
@@ -204,11 +203,6 @@ class DatabaseClient:
         else:
             q = self.conn.execute(query)
 
-        # Fetch rows and get column info before checking output format
-        rows = q.fetchall()
-        columns = [d[0] for d in q.description]
-        column_types = [d[1] for d in q.description]
-
         if self._json_response:
             # Extract column metadata
             columns = [
@@ -226,11 +220,13 @@ class DatabaseClient:
             }
 
             # Convert to JSON string
-            out = json.dumps(result)
+            out = json.dumps(result, indent=2)
         else:
-            # Return tabulated output
-            headers = [col + "\n" + str(col_type) for col, col_type in zip(columns, column_types)]
-            out = tabulate(rows, headers=headers, tablefmt="pretty")
+            out = tabulate(
+                q.fetchall(),
+                headers=[d[0] + "\n" + str(d[1]) for d in q.description],
+                tablefmt="pretty",
+            )
 
         if self.conn is None:
             conn.close()
