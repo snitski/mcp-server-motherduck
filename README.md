@@ -11,7 +11,7 @@ An MCP server implementation that interacts with DuckDB and MotherDuck databases
 ## Features
 
 - **Hybrid execution**: query data from local DuckDB or/and cloud-based MotherDuck databases
-- **Cloud storage integration**: access data stored in Amazon S3 or other cloud storage thanks to MotherDuck's integrations
+- **Cloud storage integration**: access data stored in Amazon S3, Cloudflare R2, or other cloud storage thanks to MotherDuck's integrations
 - **Data sharing**: create and share databases
 - **SQL analytics**: use DuckDB's SQL dialect to query any size of data directly from your AI Assistant or IDE
 - **Serverless architecture**: run analytics without needing to configure instances or clusters
@@ -43,7 +43,7 @@ The MCP server supports the following parameters:
 | `--transport` | Choice | `stdio` | Transport type. Options: `stdio`, `sse`, `stream`                                                                                                                                                                                                              |
 | `--port` | Integer | `8000` | Port to listen on for sse and stream transport mode                                                                                                                                                                                                            |
 | `--host` | String | `127.0.0.1` | Host to bind the MCP server for sse and stream transport mode                                                                                                                                                                                                  |
-| `--db-path` | String | `md:` | Path to local DuckDB database file, MotherDuck database, or S3 URL (e.g., `s3://bucket/path/to/db.duckdb`)                                                                                                                                                     |
+| `--db-path` | String | `md:` | Path to local DuckDB database file, MotherDuck database, S3 URL (e.g., `s3://bucket/path/to/db.duckdb`), or R2 URL (e.g., `r2://bucket/path/to/db.duckdb`)                                                                                                                                                     |
 | `--motherduck-token` | String | `None` | Access token to use for MotherDuck database connections (uses `motherduck_token` env var by default)                                                                                                                                                           |
 | `--read-only` | Flag | `False` | Flag for connecting to DuckDB or MotherDuck in read-only mode. For DuckDB it uses short-lived connections to enable concurrent access                                                                                                                          |
 | `--home-dir` | String | `None` | Home directory for DuckDB (uses `HOME` env var by default)                                                                                                                                                                                                     |
@@ -77,7 +77,7 @@ If you plan to use the MCP with Claude Desktop or any other MCP comptabile clien
 ### Prerequisites for DuckDB
 
 - No prerequisites. The MCP server can create an in-memory database on-the-fly
-- Or connect to an existing local DuckDB database file , or one stored on remote object storage (e.g., AWS S3).
+- Or connect to an existing local DuckDB database file, or one stored on remote object storage (e.g., AWS S3, Cloudflare R2).
 
 See [Connect to local DuckDB](#connect-to-local-duckdb).
 
@@ -369,6 +369,38 @@ You can connect to DuckDB databases stored on Amazon S3 by providing an S3 URL a
 - The httpfs extension is automatically installed and configured for S3 access
 - Both read and write operations are supported
 
+## Connect to DuckDB on Cloudflare R2
+
+You can connect to DuckDB databases stored on Cloudflare R2 by providing an R2 URL as the database path. The server will automatically configure the necessary R2 credentials from your environment variables.
+
+```json
+{
+  "mcpServers": {
+    "mcp-server-motherduck": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-motherduck",
+        "--db-path",
+        "r2://your-bucket/path/to/database.duckdb"
+      ],
+      "env": {
+        "R2_ACCESS_KEY_ID": "<your_key>",
+        "R2_SECRET_ACCESS_KEY": "<your_secret>",
+        "R2_ACCOUNT_ID": "<your_account_id>"
+      }
+    }
+  }
+}
+```
+
+
+**Note**: For R2 connections:
+- R2 credentials must be provided via environment variables (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_ACCOUNT_ID`)
+- The R2 database is attached to an in-memory DuckDB instance
+- The httpfs extension is automatically installed and configured for R2 access
+- Both read and write operations are supported
+- R2 uses the S3-compatible API, so the connection works seamlessly with DuckDB's S3 support
+
 ## Example Queries
 
 Once configured, you can e.g. ask Claude to run queries like:
@@ -376,7 +408,7 @@ Once configured, you can e.g. ask Claude to run queries like:
 - "Create a new database and table in MotherDuck"
 - "Query data from my local CSV file"
 - "Join data from my local DuckDB database with a table in MotherDuck"
-- "Analyze data stored in Amazon S3"
+- "Analyze data stored in Amazon S3 or Cloudflare R2"
 
 ## Running in SSE mode
 
@@ -401,6 +433,96 @@ npx -y supergateway --stdio "uvx mcp-server-motherduck --db-path md: --motherduc
 ```
 
 Both methods allow you to point your clients such as Claude Desktop, Cursor to the SSE endpoint.
+
+## Deploying to Modal
+
+The MCP server can be deployed to [Modal](https://modal.com) for serverless hosting. This allows you to run the MCP server as a cloud-hosted HTTP endpoint.
+
+### Prerequisites
+
+- A Modal account ([sign up here](https://modal.com))
+- Modal CLI installed: `pip install modal` or `uv pip install modal`
+- A `.env` file with your configuration (see below)
+
+### Configuration
+
+Create a `.env` file in the project root with your configuration:
+
+```bash
+# Required: MotherDuck token (or use MOTHERDUCK_TOKEN)
+motherduck_token=your_motherduck_token_here
+
+# Optional: Database path (default: md:)
+DB_PATH=md:
+
+# Optional: Home directory for DuckDB
+HOME_DIR=/tmp
+
+# Optional: Enable SaaS mode (set to 'true' for enhanced security)
+SAAS_MODE=false
+
+# Optional: Enable read-only mode (set to 'true' for read-only access)
+READ_ONLY=false
+
+# Optional: Enable JSON responses (set to 'true' for JSON instead of SSE streams)
+JSON_RESPONSE=false
+
+# Optional: For S3 connections
+# AWS_ACCESS_KEY_ID=your_key
+# AWS_SECRET_ACCESS_KEY=your_secret
+# AWS_DEFAULT_REGION=us-east-1
+
+# Optional: For R2 connections
+# R2_ACCESS_KEY_ID=your_key
+# R2_SECRET_ACCESS_KEY=your_secret
+# R2_ACCOUNT_ID=your_account_id
+```
+
+### Deploying
+
+1. **Set up Modal secrets** (if using `.env` file):
+   ```bash
+   modal secret create mcp-server-motherduck --env-file .env
+   ```
+
+2. **Deploy to Modal**:
+   ```bash
+   # Deploy to dev environment
+   make deploy env=dev
+
+   # Deploy to prod environment
+   make deploy env=prod
+   ```
+
+3. **Test locally** (before deploying):
+   ```bash
+   # Run locally with Modal
+   make serve env=dev
+   ```
+
+### Accessing the Deployed Server
+
+After deployment, Modal will provide you with a URL like:
+```
+https://your-username--mcp-server-motherduck-mcp-server.modal.run
+```
+
+You can then configure your MCP clients to connect to this URL at the `/mcp` endpoint.
+
+### Environment Variables
+
+The Modal deployment reads configuration from environment variables:
+
+- `DB_PATH`: Database path (default: `md:`)
+- `motherduck_token` or `MOTHERDUCK_TOKEN`: MotherDuck access token
+- `HOME_DIR`: Home directory for DuckDB (optional)
+- `SAAS_MODE`: Set to `true` for SaaS mode (optional)
+- `READ_ONLY`: Set to `true` for read-only mode (optional)
+- `JSON_RESPONSE`: Set to `true` for JSON responses (optional)
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`: For S3 connections (optional)
+- `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`: For R2 connections (optional)
+
+These can be set via Modal secrets (recommended) or environment variables in the Modal dashboard.
 
 ## Development configuration
 

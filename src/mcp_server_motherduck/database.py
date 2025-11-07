@@ -36,9 +36,9 @@ class DatabaseClient:
 
         logger.info(f"🔌 Connecting to {self.db_type} database")
 
-        # S3 databases don't support read-only mode
-        if self.db_type == "s3" and self._read_only:
-            raise ValueError("Read-only mode is not supported for S3 databases")
+        # S3 and R2 databases don't support read-only mode
+        if self.db_type in ("s3", "r2") and self._read_only:
+            raise ValueError(f"Read-only mode is not supported for {self.db_type.upper()} databases")
 
         if self.db_type == "duckdb" and self._read_only:
             # check that we can connect, issue a `select 1` and then close + return None
@@ -57,12 +57,12 @@ class DatabaseClient:
                 logger.error(f"❌ Read-only check failed: {e}")
                 raise
 
-        # Check if this is an S3 path
-        if self.db_type == "s3":
-            # For S3, we need to create an in-memory connection and attach the S3 database
+        # Check if this is an S3 or R2 path
+        if self.db_type in ("s3", "r2"):
+            # For S3/R2, we need to create an in-memory connection and attach the database
             conn = duckdb.connect(':memory:')
             
-            # Install and load the httpfs extension for S3 support
+            # Install and load the httpfs extension for S3/R2 support
             import io
             from contextlib import redirect_stdout, redirect_stderr
             
@@ -74,43 +74,60 @@ class DatabaseClient:
                     pass  # Extension might already be installed
                 conn.execute("LOAD httpfs;")
             
-            # Configure S3 credentials from environment variables using CREATE SECRET
-            aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
-            aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
-            aws_region = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
+            if self.db_type == "s3":
+                # Configure S3 credentials from environment variables using CREATE SECRET
+                aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
+                aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+                aws_region = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
+                
+                if aws_access_key and aws_secret_key:
+                    # Use CREATE SECRET for better credential management
+                    conn.execute(f"""
+                        CREATE SECRET IF NOT EXISTS s3_secret (
+                            TYPE S3,
+                            KEY_ID '{aws_access_key}',
+                            SECRET '{aws_secret_key}',
+                            REGION '{aws_region}'
+                        );
+                    """)
+            elif self.db_type == "r2":
+                # Configure R2 credentials from environment variables using CREATE SECRET
+                r2_access_key = os.environ.get('R2_ACCESS_KEY_ID')
+                r2_secret_key = os.environ.get('R2_SECRET_ACCESS_KEY')
+                r2_account_id = os.environ.get('R2_ACCOUNT_ID')
+                
+                if r2_access_key and r2_secret_key and r2_account_id:
+                    # Use CREATE SECRET for R2 with ACCOUNT_ID instead of REGION
+                    conn.execute(f"""
+                        CREATE SECRET IF NOT EXISTS r2_secret (
+                            TYPE r2,
+                            KEY_ID '{r2_access_key}',
+                            SECRET '{r2_secret_key}',
+                            ACCOUNT_ID '{r2_account_id}'
+                        );
+                    """)
             
-            
-            if aws_access_key and aws_secret_key:
-                # Use CREATE SECRET for better credential management
-                conn.execute(f"""
-                    CREATE SECRET IF NOT EXISTS s3_secret (
-                        TYPE S3,
-                        KEY_ID '{aws_access_key}',
-                        SECRET '{aws_secret_key}',
-                        REGION '{aws_region}'
-                    );
-                """)
-            
-            # Attach the S3 database
+            # Attach the S3/R2 database
+            db_alias = "s3db" if self.db_type == "s3" else "r2db"
             try:
-                # For S3, we always attach as READ_ONLY since S3 storage is typically read-only
-                # Even when not in read_only mode, we attach as READ_ONLY for S3
-                conn.execute(f"ATTACH '{self.db_path}' AS s3db (READ_ONLY);")
+                # For S3/R2, we always attach as READ_ONLY since object storage is typically read-only
+                # Even when not in read_only mode, we attach as READ_ONLY for S3/R2
+                conn.execute(f"ATTACH '{self.db_path}' AS {db_alias};")
                 # Use the attached database
-                conn.execute("USE s3db;")
-                logger.info(f"✅ Successfully connected to {self.db_type} database (attached as read-only)")
+                conn.execute(f"USE {db_alias};")
+                logger.info(f"✅ Successfully connected to {self.db_type.upper()} database (attached as read-only)")
             except Exception as e:
-                logger.error(f"Failed to attach S3 database: {e}")
+                logger.error(f"Failed to attach {self.db_type.upper()} database: {e}")
                 # If the database doesn't exist and we're not in read-only mode, try to create it
                 if "database does not exist" in str(e) and not self._read_only:
-                    logger.info("S3 database doesn't exist, attempting to create it...")
+                    logger.info(f"{self.db_type.upper()} database doesn't exist, attempting to create it...")
                     try:
-                        # Create a new database at the S3 location
-                        conn.execute(f"ATTACH '{self.db_path}' AS s3db;")
-                        conn.execute("USE s3db;")
-                        logger.info(f"✅ Created new S3 database at {self.db_path}")
+                        # Create a new database at the S3/R2 location
+                        conn.execute(f"ATTACH '{self.db_path}' AS {db_alias};")
+                        conn.execute(f"USE {db_alias};")
+                        logger.info(f"✅ Created new {self.db_type.upper()} database at {self.db_path}")
                     except Exception as create_error:
-                        logger.error(f"Failed to create S3 database: {create_error}")
+                        logger.error(f"Failed to create {self.db_type.upper()} database: {create_error}")
                         raise
                 else:
                     raise
@@ -129,8 +146,12 @@ class DatabaseClient:
 
     def _resolve_db_path_type(
         self, db_path: str, motherduck_token: str | None = None, saas_mode: bool = False
-    ) -> tuple[str, Literal["duckdb", "motherduck", "s3"]]:
+    ) -> tuple[str, Literal["duckdb", "motherduck", "s3", "r2"]]:
         """Resolve and validate the database path"""
+        # Handle R2 paths (check before S3 since r2:// is more specific)
+        if db_path.startswith("r2://"):
+            return db_path, "r2"
+        
         # Handle S3 paths
         if db_path.startswith("s3://"):
             return db_path, "s3"
