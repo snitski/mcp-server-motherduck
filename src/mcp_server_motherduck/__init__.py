@@ -24,7 +24,7 @@ logging.basicConfig(
 @click.option(
     "--db-path",
     default="md:",
-    help="(Default: `md:`) Path to local DuckDB database file or MotherDuck database",
+    help="(Default: `md:`) Path to local DuckDB database file, MotherDuck database, S3 URL (e.g., s3://bucket/path/to/db.duckdb), or R2 URL (e.g., r2://bucket/path/to/db.duckdb)",
 )
 @click.option(
     "--motherduck-token",
