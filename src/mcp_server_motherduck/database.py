@@ -4,6 +4,7 @@ from typing import Literal, Optional
 import io
 from contextlib import redirect_stdout
 from tabulate import tabulate
+import json
 import logging
 from .configs import SERVER_VERSION
 
@@ -18,8 +19,10 @@ class DatabaseClient:
         home_dir: str | None = None,
         saas_mode: bool = False,
         read_only: bool = False,
+        json_output: bool = False,
     ):
         self._read_only = read_only
+        self._json_output = json_output
         self.db_path, self.db_type = self._resolve_db_path_type(
             db_path, motherduck_token, saas_mode
         )
@@ -201,11 +204,19 @@ class DatabaseClient:
         else:
             q = self.conn.execute(query)
 
-        out = tabulate(
-            q.fetchall(),
-            headers=[d[0] + "\n" + str(d[1]) for d in q.description],
-            tablefmt="pretty",
-        )
+        # Fetch rows and get column info before checking output format
+        rows = q.fetchall()
+        columns = [d[0] for d in q.description]
+        column_types = [d[1] for d in q.description]
+
+        if self._json_output:
+            # Return JSON output
+            result = [dict(zip(columns, row)) for row in rows]
+            out = json.dumps(result, indent=2)
+        else:
+            # Return tabulated output
+            headers = [col + "\n" + str(col_type) for col, col_type in zip(columns, column_types)]
+            out = tabulate(rows, headers=headers, tablefmt="pretty")
 
         if self.conn is None:
             conn.close()
